@@ -4,8 +4,7 @@ import telepot
 
 from dataclasses import dataclass, field
 from carl import command
-from pprint import pprint
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Callable
 from random import shuffle
 from textwrap import dedent
 
@@ -17,6 +16,9 @@ from telepot.namedtuple import (
     KeyboardButton, ReplyKeyboardRemove
 )
 
+import gettext
+from gettext import gettext as _
+
 @dataclass
 class Card:
     value:str
@@ -27,6 +29,7 @@ class Player:
     name:str
     id:int
     group_id:int
+    language:str
     cards:Dict = field(default_factory=lambda: {})
     foreign_aid_cards:int = 0
 
@@ -50,7 +53,8 @@ class Player:
     def card_value(self, message_id: int):
         return self.cards[message_id].value
 
-INFLUENCES = ['Duque', 'Capitão', 'Embaixador', 'Assassino', 'Duquesa']
+INFLUENCES = ['Duke', 'Captain', 'Embassador',
+             'Assassin', 'Duchess']
 N_CARDS = {
     1:15,
     2:15,
@@ -104,18 +108,18 @@ class CoupBot:
     games:Dict = field(default_factory=lambda: {})
     players:Dict = field(default_factory=lambda:{})
 
-    async def start(self, message, _):
+    async def start(self, message, args):
         chat_id = message['chat']['id']
         message_id = message['message_id']
         user_id = message['from']['id']
         chat_type = message['chat']['type']
+        user_language = message['from']['language_code'][:2]
+        _ = self.translate_function(user_language)
 
         if chat_id in self.games:
             # there's already a game in this group
-            reply = '''
-                Já existe um jogo nesse chat, acabe-o primeiro. Ou dê um \
-/force_endgame, mas isso interromperá o jogo no meio!
-            '''
+            reply = _("There's already a game in this chat, finish it firt. \
+Alternatively, you can /force_game, but it'll interrupt the current game!")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -124,9 +128,7 @@ class CoupBot:
 
         elif chat_type != 'group' and chat_type != 'supergroup':
             # tried to create a game outside a group 
-            reply = '''
-                O jogo deve ser iniciado em um grupo.
-            '''
+            reply = _("The game must be started in a group.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -134,16 +136,15 @@ class CoupBot:
             )
 
         else:
+
             game = Game()
             self.games[chat_id] = game
             user_name = message['from']['first_name']
-            player = Player(user_name, user_id, chat_id)
+            player = Player(user_name, user_id, chat_id,user_language)
 
             player_added = await self.add_player(message_id, player, game)
             if player_added: 
-                reply = '''
-                    Um jogo foi iniciado.
-                '''
+                reply = _("A game was started.")
                 await self.bot.sendMessage(
                     chat_id,
                     reply,
@@ -152,17 +153,17 @@ class CoupBot:
             else:
                 del self.games[chat_id]
 
-    async def join(self, message,_):
+    async def join(self, message,args):
         chat_id = message['chat']['id']
         message_id = message['message_id']
         user_id = message['from']['id']
         chat_type = message['chat']['type']
+        user_language = message['from']['language_code'][:2]
+        _ = self.translate_function(user_language)
 
         if chat_id not in self.games:
             # no game was started in this chat
-            reply = '''
-                O jogo ainda não foi iniciado. Inicie com /start
-            '''
+            reply = _("The game was not start. Start it using /start")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -171,9 +172,7 @@ class CoupBot:
 
         elif user_id in self.players:
             # player already in a game
-            reply = '''
-                Você já está em um jogo.
-            '''
+            reply = _("You're already in a game.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -182,10 +181,8 @@ class CoupBot:
 
         elif self.games[chat_id].started:
             # people already started playing, can't enter
-            reply = '''
-                Não é possível entrar em uma partida já iniciado. Espere ele \
-acabar ou inicie outro. 
-            '''
+            reply = _("You can't enter a match that has already started. Wait \
+for it to end or start a new one.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -194,10 +191,8 @@ acabar ou inicie outro.
 
         elif chat_type != 'group' and chat_type != 'supergroup':
             # tried to join a game outside a group
-            reply = '''
-                Para juntar a um jogo, envie esse comando em um grupo em que \
-o jogo tenha sido iniciado.
-            '''
+            reply = _("To join a game send this command to a group where the \
+game has been started.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -206,16 +201,15 @@ o jogo tenha sido iniciado.
 
         else:
             user_name = message['from']['first_name']
-            player = Player(user_name, user_id, chat_id)
+            player = Player(user_name, user_id, chat_id, user_language)
             game = self.games[chat_id]
             await self.add_player(message_id, player, game)
 
     async def add_player(self, message_id: int, player: Player, game: Game):
+        _ = self.translate_function(player.language)
         if player.id in self.players:
             # this player is already in a game
-            reply = '''
-                Você já está em um jogo. Saia ou acabe-o antes.
-            '''
+            reply = _("You're already in a game. Quit or finish it first.")
             await self.bot.sendMessage(
                 player.group_id,
                 reply,
@@ -224,12 +218,10 @@ o jogo tenha sido iniciado.
             return False
 
         try:
-            private_reply = '''
-                Você juntou-se a um jogo.
-            '''
+            private_reply = _("You joined a game.")
             keyboard_markup = ReplyKeyboardMarkup(keyboard=[
-                    [KeyboardButton(text="Iniciar jogo"),
-                    KeyboardButton(text="Sair do jogo")]
+                    [KeyboardButton(text=_("Start game")),
+                    KeyboardButton(text=_("Quit game"))]
             ])
 
             await self.bot.sendMessage(
@@ -239,9 +231,8 @@ o jogo tenha sido iniciado.
             )
         except:
             # couldn't send a private message
-            error_message = '''
-                Você não consegue fazer isso. Tenta me dar um oi no chat privado antes :)
-            '''
+            error_message = _("You can't do this. Try sending me a hi in \
+private first :)")
             await self.bot.sendMessage(
                 player.group_id,
                 error_message,
@@ -253,7 +244,7 @@ o jogo tenha sido iniciado.
         self.players[player.id] = player
         return True
 
-    async def start_game(self, message, _):
+    async def start_game(self, message, args):
         player_id = message['from']['id']
         group_id = self.players[player_id].group_id
         game = self.games[group_id]
@@ -268,26 +259,33 @@ o jogo tenha sido iniciado.
                 await self.send_random_card(player, game)
 
     async def send_actions(self, player: Player):
-        actions = dedent(
-            '''\
-                *Influências e suas ações:*
-                *Todos* - Pega 1 moeda. Pega duas moedas. Gasta 7 moedas para \
-dar um golpe de estado (mata uma influência de um jogador a sua escolha). Com \
-10 ou mais moedas golpe de estado é obrigatório.
-                *Duque* - Pega 3 moedas. Bloqueia pegar duas moedas.
-                *Capitão* - Rouba 2 moedas de um jogador. Bloqueia outro capitão.
-                *Embaixador* - Pede ajuda externa, ou seja, compra o número de \
-influencias que possui, elimina até ter o número de influências que \
-tinha antes. Bloqueia capitão.
-                *Assassino* - Mata uma influência de um jogador a sua escolha \
-por 3 moedas.
-                *Duquesa* - Bloqueia o assassino.
-            '''
-        )
+        _ = self.translate_function(player.language)
+        # Again, weird way to declare string, but that's how I managed
+        # i18n stuff to work
+        actions = _("*Influences and it's actions*")
+        actions += '\n'
+        actions += _("*All* - Get 1 coin. Get 2 coins. Spend 7 coins to give \
+a coup d'etat (kill a influence of a player of your choice). With 10 or more \
+coins, coup d'etat is mandatory.")
+        actions += '\n'
+        actions += _("*Duke* - Get 3 coins. Blocks a player of getting 2 \
+coins.")
+        actions += '\n'
+        actions += _("*Captain* - Steals 2 coins of another player. Blocks \
+other captains.")
+        actions += '\n'
+        actions += _("*Embassador* - Asks for foreign aid, buy the number of \
+influeces you possess, eliminates them until you have the number of you had \
+before. Blocks captains.")
+        actions += '\n'
+        actions += _("*Assassin* - Kills a influence of a player of your \
+choice for 3 coins.")
+        actions += '\n'
+        actions += _("*Duchess* - Blocks assassins.")
 
         keyboard_markup = ReplyKeyboardMarkup(keyboard=[
-                [KeyboardButton(text="Ajuda externa"),
-                KeyboardButton(text="Sair do jogo")]
+                [KeyboardButton(text=_("Foreign aid")),
+                KeyboardButton(text=_("Quit game"))]
         ])
 
         await self.bot.sendMessage(
@@ -298,34 +296,47 @@ por 3 moedas.
         )
 
     async def send_random_card(self, player: Player, game: Game):
+        _ = self.translate_function(player.language)
         new_card = game.random_card()
-        keyboard = self.new_card_keyboard()
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=_('Hide'),
+                callback_data='/hide'
+            ),
+            InlineKeyboardButton(
+                text=_('Remove'),
+                callback_data='/delete'
+            )],
+        ])
+
         new_card_message = await self.bot.sendMessage(
             player.id,
-            new_card.value,
+            _(new_card.value),
             reply_markup=keyboard
         )
 
         message_id = new_card_message['message_id']
         player.add_card(new_card, message_id)
 
-    async def hide(self, message, _):
+    async def hide(self, message, args):
         chat_id = message['message']['chat']['id']
         message_id = message['message']['message_id']
         card_value = message['message']['text']
+        player = self.players[chat_id]
+        _ = self.translate_function(player.language)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text='Mostrar',
+                text=_('Show'),
                 callback_data='/show'
             ),
             InlineKeyboardButton(
-                text='Remover',
+                text=_('Remove'),
                 callback_data='/delete'
             )],
         ])
 
-        player = self.players[chat_id]
         player.hide_card(message_id)
         await self.bot.editMessageText(
             msg_identifier=(chat_id, message_id),
@@ -333,17 +344,19 @@ por 3 moedas.
             reply_markup=keyboard
         )
 
-    async def show(self, message, _):
+    async def show(self, message, args):
         chat_id = message['message']['chat']['id']
         message_id = message['message']['message_id']
+        player = self.players[chat_id]
+        _ = self.translate_function(player.language)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text='Esconder',
+                text=_('Hide'),
                 callback_data='/hide'
             ),
             InlineKeyboardButton(
-                text='Remover',
+                text=_('Remove'),
                 callback_data='/delete'
             )],
         ])
@@ -353,19 +366,20 @@ por 3 moedas.
         card_value = player.card_value(message_id)
         await self.bot.editMessageText(
             msg_identifier=(chat_id, message_id),
-            text=card_value,
+            text=_(card_value),
             reply_markup=keyboard
         )
 
-    async def delete(self, message, _):
+    async def delete(self, message, args):
         message_id = message['message']['message_id']
         chat_id = message['message']['chat']['id']
         player = self.players[chat_id]
         group_id = player.group_id
         game = self.games[group_id]
+        _ = self.translate_function(player.language)
 
         card = player.pop_card(message_id)
-        message = 'Uma carta de {} foi deletada.'.format(player.name)
+        message = _('A card from {} was deleted.').format(player.name)
         await self.bot.sendMessage(group_id, message)
         await self.bot.deleteMessage((chat_id, message_id))
 
@@ -373,14 +387,14 @@ por 3 moedas.
             # if a showing card is delete and the player isn't in a foreign
             # aid, the player just proved having an influence. Send another
             await self.send_random_card(player, game)
-            message = '{} comprou uma nova carta'.format(player.name)
+            message = _('{} bought a new card').format(player.name)
             await self.bot.sendMessage(group_id, message)
 
         elif player.foreign_aid_cards != 0:
             # The player is deciding which of the cards will stay after the aid
             player.foreign_aid_cards -= 1
             if player.foreign_aid_cards == 0:
-                message = '{} terminou a ajuda externa'.format(player.name)
+                message = _('{} finished a foreign aid').format(player.name)
                 await self.bot.sendMessage(group_id, message)
 
         game.stack_card(card)
@@ -399,24 +413,26 @@ por 3 moedas.
 
     async def finish_game(self, game: Game):
         player = next(iter(game.players))
-        message = 'Você ganhou o jogo'
+        _ = self.translate_function(player.language)
+
+        message = _('You won the game')
         await self.bot.sendMessage(player.id, message)
         await self.remove_player(player, game)
 
         group_id = player.group_id
-        message = 'Fim de jogo, {} venceu'.format(player.name)
+        message = _('Game over, {} won').format(player.name)
         await self.bot.sendMessage(group_id, message)
 
-        del self.players[player.id]
         del self.games[group_id]
 
-    async def foreign_aid(self, message, _):
+    async def foreign_aid(self, message, args):
         player_id = message['from']['id']
         player = self.players[player_id]
         group_id = player.group_id
+        _ = self.translate_function(player.language)
 
         if player.foreign_aid_cards == 0:
-            message = '{} pediu ajuda externa.'.format(player.name)
+            message = _('{} used foreign aid.').format(player.name)
             await self.bot.sendMessage(group_id, message)
 
             n_cards = len(player.cards)
@@ -425,7 +441,7 @@ por 3 moedas.
                 game = self.games[group_id]
                 await self.send_random_card(player, game)
             
-    async def quit_game(self, message, _):
+    async def quit_game(self, message, args):
         player_id = message['from']['id']
         player = self.players[player_id]
         group_id = player.group_id
@@ -437,11 +453,12 @@ por 3 moedas.
             await self.finish_game(game)
 
     async def remove_player(self, player: Player, game: Game):
+        _ = self.translate_function(player.language)
         for message_id in dict(player.cards):
             card = player.pop_card(message_id)
             game.stack_card(card)
             await self.bot.deleteMessage((player.id, message_id))
-        message = 'Você saiu do jogo.'
+        message = _('You quitted the game.')
         await self.bot.sendMessage(
             player.id,
             message,
@@ -451,15 +468,17 @@ por 3 moedas.
         del self.players[player.id]
         game.remove_player(player)
 
-    async def force_endgame(self, message, _):
+    async def force_endgame(self, message, args):
         chat_type = message['chat']['type']
         message_id = message['message_id']
         chat_id = message['chat']['id']
+        player_language = message['from']['language_code'][:2]
+        _ = self.translate_function(player_language)
+
         if chat_type != 'group' and chat_type != 'supergroup':
             # tried to end a game outside a group
-            reply = '''
-                Essa ação só pode ser feita em um grupo com jogo iniciado.
-            '''
+            reply = _("This action can only be done in a group with a started \
+game.")
             await self.bot.sendMessage(
                 chat_id,
                 reply, 
@@ -467,9 +486,7 @@ por 3 moedas.
             )
         elif chat_id not in self.games:
             # no game in this group
-            reply = '''
-                Esse grupo ainda não iniciou um jogo.
-            '''
+            reply = _("This group haven't started a game.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -481,38 +498,23 @@ por 3 moedas.
                 await self.remove_player(player, game)
             del self.games[chat_id]
 
-            reply = '''
-                Jogo terminado.
-            '''
+            reply = _("Game over.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
                 reply_to_message_id=message_id
             )
 
-    def new_card_keyboard(self):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text='Esconder',
-                callback_data='/hide'
-            ),
-            InlineKeyboardButton(
-                text='Remover',
-                callback_data='/delete'
-            )],
-        ])
-        return keyboard
-
-    async def status(self, message, _):
+    async def status(self, message, args):
         player_id = message['from']['id']
         chat_id = message['chat']['id']
         message_id = message['message_id']
+        player_language = message['from']['language_code'][:2]
+        _ = self.translate_function(player_language)
 
         if player_id not in self.players:
             # tried to get status while not part of a game
-            reply = '''
-                Você não está em um jogo.
-            '''
+            reply = _("You're not in a game.")
             await self.bot.sendMessage(
                 chat_id,
                 reply,
@@ -524,12 +526,12 @@ por 3 moedas.
 
             reply = ''
             for player in game.players:
-                reply += '*{}*: {} cartas.'.format(
+                reply += _('*{}*: {} card(s).').format(
                     player.name, len(player.cards)
                 )
 
                 if player.foreign_aid_cards != 0:
-                    reply += ' {} cartas de ajuda externa'.format(
+                    reply += _(' {} foreign aid card(s)').format(
                         player.foreign_aid_cards
                     )
 
@@ -544,50 +546,75 @@ por 3 moedas.
             )
             game.last_status_sent = sent_message['message_id']
 
-    async def help(self, message, _):
+    async def help(self, message, args):
         chat_id = message['from']['id']
         message_id = message['message_id']
-        reply = '''
-            */start* - Começa o jogo no grupo de onde foi enviado.
-            */join* - O usuário junta-se à partida ainda não iniciada.
-            */force_endgame* - Força o fim da partida no grupo de onde foi enviado.
-            */rules* - Envia uma mensagem com as regras do jogo.
-            */status* - Envia para o grupo o status do jogo atual.
-        '''
+        player_language = message['from']['language_code'][:2]
+        _ = self.translate_function(player_language)
+
+        # ok. internacionalization is weird and this way was the only one I
+        # could manage to generate a correct template for i18n
+        reply = _("*/start* - Start a game in a group.")
+        reply += '\n'
+        reply += _("*/join* - User joins the game if that match \
+hasn't started.")
+        reply += '\n'
+        reply += _("*/force_endgame* - Forces the end of the game in a group.")
+        reply += '\n'
+        reply += _("*/rules* - Send a message with the game's rules.")
+        reply += '\n'
+        reply = _("*/status* - Send to the group the current state of the \
+game.")
+
         await self.bot.sendMessage(
             chat_id, reply,
             reply_to_message_id=message_id,
             parse_mode='Markdown'
         )
 
-    async def rules(self, message, _):
+    async def rules(self, message, args):
         chat_id = message['from']['id']
         message_id = message['message_id']
-        reply = '''
-            Cada jogador é um membro da corte francesa e possui duas influências. \
-Cada jogador joga uma vez por rodada, em sua vez o jogador pode realizar uma ação, \
-as ações que cada influência pode fazer são explicadas ao iniciar o jogo. Ao \
-realizar uma ação de uma influência específica, o jogador deve declarar 'Sou x \
-portanto faço y', ou outros jogadores podem aceitar ou contestar, alegando que \
-o jogador da vez não possui a influência que declarou. Se o jogador da vez \
-realmente estava blefando, ele esconde suas influências e deixa o contestador \
-excluir uma delas, caso contrário o jogador mostra que realmente possuia a \
-influência, exlcui ela (recebendo uma nova logo em seguida), e é o jogador \
-que o acusou que esconde as cartas e tem uma influencia excluida pelo jogador da vez.
-            Quando um jogador for alvo de um assassinato bem sucedido ou de um \
-golpe de estado, ele deve esconder suas cartas e deixar o atacante selecionar uma \
-para excluir.
-            Para não tirar o aspecto social do jogo, esse bot não implementa \
-as moedas. Isso não é nenhum impedimento para jogar, literalmente qualquer coisa \
-pode representar as moedas, desde papéis picotados até as meias de natal que \
-você ganhou da sua tia Bárbara e nunca tirou do pacote.
-            Ganha o jogo a última pessoa que tiver influências sobrando.
-        '''
+        player_language = message['from']['language_code'][:2]
+        _ = self.translate_function(player_language)
 
-    def default(self, message, _):
+        # ok. internacionalization is weird and this way was the only one I
+        # could manage to generate a correct template for i18n
+        reply = _("Each player is a member of the french court and possess \
+two influences. Each player playes once per round, on it's turn the player \
+performs an action, which actions each influence can perform will be \
+explained at the beginning of the game. When an action from a specific \
+influence is performed, the player must declare \"I'm X and I'll do Y\", other \
+players com accept or contest, claiming the player doesn't have it influence \
+it claims to have. If the player was really bluffing, it hides it's influences \
+and let the contestant player choose a card to delete, otherwise the player \
+shows that it really had that influence and it's the contestant player that \
+hide it's cards and allow a card to be deleted.")
+        reply += "\n"
+        reply += _("When a player is a victm of the assassin or a coup d'etat,\
+ it must hide it's cards and allow the attacker to choose one to remove.")
+        reply += "\n"
+        reply += _("In order to keep the social aspect of the game, this bot \
+doesn't implement coins. This is no obstacle, literally anything can represent \
+coins, from cutted paper to the christmas socks your aunt Barbara gave to you \
+and you never unpacked.")
+        reply += "\n"
+        reply += _("Wins the game the last player with at least one influence \
+remaining.")
+
+        await self.bot.sendMessage(chat_id, reply, reply_to_message_id=message_id)
+
+    def translate_function(self, language):
+        return LANGUAGES[language].gettext
+
+
+    def default(self, message, args):
         pass
 
     def read_command(self, message):
+        player_language = message['from']['language_code'][:2]
+        _ = self.translate_function(player_language)
+
         if 'text' in message:
             message_text = message['text']
         else:
@@ -600,11 +627,11 @@ você ganhou da sua tia Bárbara e nunca tirou do pacote.
     
             return command, (args,)
         else:
-            if message_text == 'Iniciar jogo':
+            if message_text == _('Start game'):
                 return 'start_game', ([],)
-            elif message_text == 'Ajuda externa':
+            elif message_text == _('Foreign aid'):
                 return 'foreign_aid', ([],)
-            elif message_text == 'Sair do jogo':
+            elif message_text == _('Quit game'):
                 return 'quit_game', ([],)
 
 def routes(coup_bot: CoupBot):
@@ -624,8 +651,24 @@ def routes(coup_bot: CoupBot):
 
     return router.route
 
+LANGUAGES = {}
 @command
 async def main(token):
+    pt = gettext.translation(
+        'base',
+        localedir='locales',
+        languages=['pt']
+    )
+    pt.install()
+    LANGUAGES['pt'] = pt
+    en = gettext.translation(
+        'base',
+        localedir='locales',
+        languages=['en']
+    )
+    en.install()
+    LANGUAGES['en'] = en
+
     coup_bot = CoupBot(Bot(token))
     loop = asyncio.get_event_loop()
     loop.create_task(
