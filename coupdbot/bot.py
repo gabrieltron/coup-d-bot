@@ -1,104 +1,15 @@
-import sys
-import asyncio
-import telepot
-
 from dataclasses import dataclass, field
-from carl import command
-from typing import Dict, List, Set, Callable
-from random import shuffle
 from textwrap import dedent
+from typing import Dict
 
 from telepot.aio import Bot
-from telepot.aio.helper import Router, Editor
-from telepot.aio.loop import MessageLoop
-from telepot.namedtuple import (
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardRemove
-)
+from telepot.namedtuple import (InlineKeyboardButton, InlineKeyboardMarkup,
+                                KeyboardButton, ReplyKeyboardMarkup,
+                                ReplyKeyboardRemove)
 
+from .game import Game
+from .player import Player
 
-@dataclass
-class Card:
-    value:str
-    hidden:bool = False
-
-@dataclass
-class Player:
-    name:str
-    id:int
-    group_id:int
-    cards:Dict = field(default_factory=lambda: {})
-    foreign_aid_cards:int = 0
-
-    def __hash__(self):
-        return hash(id)
-
-    def add_card(self, card: Card, message_id: int):
-        self.cards[message_id] = card
-
-    def pop_card(self, message_id: int):
-        card = self.cards[message_id]
-        del self.cards[message_id]
-        return card
-
-    def hide_card(self, message_id: int):
-        self.cards[message_id].hidden = True
-
-    def show_card(self, message_id: int):
-        self.cards[message_id].hidden = False
-
-    def card_value(self, message_id: int):
-        return self.cards[message_id].value
-
-INFLUENCES = ['Duke', 'Captain', 'Embassador',
-             'Assassin', 'Duchess']
-N_CARDS = {
-    1:15,
-    2:15,
-    3:15,
-    4:15,
-    5:15,
-    6:15,
-    7:20,
-    8:20,
-    9:25,
-    10:25
-}
-
-@dataclass
-class Game:
-    players:Set = field(default_factory=lambda: set())
-    deck:List = field(default_factory=lambda: [])
-    started:bool = False
-    last_status_sent:int = 0
-
-    def add_player(self, player: Player):
-        self.players.add(player)
-
-    def remove_player(self, player: Player):
-        self.players.remove(player)
-
-    def create_deck(self):
-        n_players = len(self.players)
-        n_cards = N_CARDS[n_players]
-        n_influences = len(INFLUENCES)
-        n_each_influence = n_cards // n_influences
-
-        for i in range(n_each_influence):
-            for influence in INFLUENCES:
-                card = Card(influence)
-                self.deck.append(card)
-
-        shuffle(self.deck)
-
-    def random_card(self):
-        # Since it's always shuffled the card is random
-        return self.deck.pop()
-
-    def stack_card(self, card: Card):
-        card.hidden = False
-        self.deck.append(card)
-        shuffle(self.deck)
 
 @dataclass
 class CoupBot:
@@ -605,4 +516,3 @@ class CoupBot:
                 return 'foreign_aid', ([],)
             elif message_text == 'Quit game':
                 return 'quit_game', ([],)
-
