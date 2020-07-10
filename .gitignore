@@ -1,0 +1,11 @@
+.coverage
+dist/
+*.egg-info/
+*.html
+.mypy_cache/
+pip-wheel-metadata/
+__pycache__
+*.sw?
+venv/
+.venv
+*.xml

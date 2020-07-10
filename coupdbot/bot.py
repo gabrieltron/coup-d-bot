@@ -606,34 +606,3 @@ class CoupBot:
             elif message_text == 'Quit game':
                 return 'quit_game', ([],)
 
-def routes(coup_bot: CoupBot):
-    routes = {
-        x: getattr(coup_bot, x)
-        for x in
-        ['start', 'join', 'start_game', 'hide', 'show',
-        'delete', 'foreign_aid', 'quit_game', 'force_endgame',
-        'help', 'rules', 'status']
-    }
-    routes[None] = coup_bot.default
-
-    router = Router(
-        coup_bot.read_command,
-        routes,
-    )
-
-    return router.route
-
-LANGUAGES = {}
-@command
-async def main(token):
-    coup_bot = CoupBot(Bot(token))
-    loop = asyncio.get_event_loop()
-    loop.create_task(
-        MessageLoop(coup_bot.bot, routes(coup_bot)
-    ).run_forever())
-
-
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main.run_async())
-    loop.run_forever()
