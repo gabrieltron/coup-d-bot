@@ -9,12 +9,18 @@ from .bot import CoupBot
 
 
 def routes(coup_bot: CoupBot):
+    '''
+    Set routes to call functions when a command is read
+
+    Args:
+        coup_bot: The CoupBot instance that will be executed
+    '''
     routes = {
         x: getattr(coup_bot, x)
         for x in
-        ['start', 'join', 'start_game', 'hide', 'show',
-        'delete', 'foreign_aid', 'quit_game', 'force_endgame',
-        'help', 'rules', 'status']
+        ['new_game', 'join', 'start', 'actions', 'hide', 'show',
+         'delete', 'foreign_aid', 'force_endgame',
+         'help', 'rules', 'status']
     }
     routes[None] = coup_bot.default
 
@@ -27,11 +33,20 @@ def routes(coup_bot: CoupBot):
 
 @command
 async def main(token):
+    '''
+    Start the bot main loop
+
+    Args:
+        token: token of the bot created with BotFather
+    '''
     coup_bot = CoupBot(Bot(token))
     loop = asyncio.get_event_loop()
     loop.create_task(
-        MessageLoop(coup_bot.bot, routes(coup_bot)
-    ).run_forever())
+        MessageLoop(
+            coup_bot.bot,
+            routes(coup_bot)
+        ).run_forever()
+    )
 
 
 if __name__ == '__main__':

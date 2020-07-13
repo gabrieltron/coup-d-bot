@@ -1,178 +1,209 @@
 from dataclasses import dataclass, field
 from textwrap import dedent
-from typing import Dict
+from typing import Any, Dict
 
 from telepot.aio import Bot
 from telepot.namedtuple import (InlineKeyboardButton, InlineKeyboardMarkup,
-                                KeyboardButton, ReplyKeyboardMarkup,
-                                ReplyKeyboardRemove)
+                                KeyboardButton, ReplyKeyboardMarkup)
 
+from .errors import ForeignAidNotFinished, GameAlreadyStarted
+from .cards import Card
 from .game import Game
-from .player import Player
 
 
 @dataclass
 class CoupBot:
-    bot:Bot
-    games:Dict = field(default_factory=lambda: {})
-    players:Dict = field(default_factory=lambda:{})
+    '''
+    The CoupBot handles user interaction
 
-    async def start(self, message, args):
+    Args:
+        bot: Bot handler
+
+    Attributes:
+        bot: Bot handler
+        games: Map from group id to its Game object.
+        player_to_game: Map from user id to its game.
+        dealt_cards: Nested map from user_id and message_id to which card
+        that message represents.
+    '''
+    bot: Bot
+    games: Dict[int, Game] = field(default_factory=lambda: {})
+    player_to_game: Dict[int, Game] = field(default_factory=lambda: {})
+    dealt_cards: Dict[int, Dict[int, Card]] = field(default_factory=lambda: {})
+
+    async def new_game(self, message: Dict[str, Any], _):
+        '''
+        Prepare to start a new game inside a group
+
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['chat']['id']
         message_id = message['message_id']
-        user_id = message['from']['id']
         chat_type = message['chat']['type']
 
         if chat_id in self.games:
-            # there's already a game in this group
             reply = dedent('''\
                 There's already a game in this chat, finish it firt.
                 Alternatively, you can /force_game, but it'll interrupt
                 the current game!
             ''')
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
 
-        elif chat_type != 'group' and chat_type != 'supergroup':
-            # tried to create a game outside a group
+        elif chat_type not in ('group', 'supergroup'):
             reply = 'The game must be started in a group.'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
 
         else:
-            game = Game()
+            game = Game(chat_id)
             self.games[chat_id] = game
-            user_name = message['from']['first_name']
-            player = Player(user_name, user_id, chat_id)
+            reply = dedent('''\
+                A new game is ready! Send a /join to join it.
+                Send a /start here once everybody is in.
+            ''')
 
-            player_added = await self.add_player(message_id, player, game)
-            if player_added:
-                reply = 'A game was started.'
-                await self.bot.sendMessage(
-                    chat_id,
-                    reply,
-                    reply_to_message_id=message_id
-                )
-            else:
-                del self.games[chat_id]
+        await self.bot.sendMessage(
+            chat_id,
+            reply,
+            reply_to_message_id=message_id
+        )
 
-    async def join(self, message,args):
+    async def join(self, message: Dict[str, Any], _):
+        '''
+        Add a player to the game, if it has not started yet
+
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['chat']['id']
         message_id = message['message_id']
         user_id = message['from']['id']
+        user_name = message['from']['first_name']
         chat_type = message['chat']['type']
 
-        if chat_id not in self.games:
-            # no game was started in this chat
-            reply = 'The game was not start. Start it using /start'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
+        if chat_type not in ('group', 'supergroup'):
+            reply = 'You must join a game inside a group.'
 
-        elif user_id in self.players:
-            # player already in a game
+        elif user_id in self.player_to_game:
             reply = 'You\'re already in a game.'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
 
-        elif self.games[chat_id].started:
-            # people already started playing, can't enter
-            reply = dedent('''\
-                You can't enter a match that has already started.
-                Wait for it to end or start a new one.
-            ''')
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
-
-        elif chat_type != 'group' and chat_type != 'supergroup':
-            # tried to join a game outside a group
-            reply = dedent('''\
-                To join a game send this command to a group where the
-                game has been started.
-            ''')
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
+        elif chat_id not in self.games:
+            reply = 'The game was not created. Create it using /new_game'
 
         else:
-            user_name = message['from']['first_name']
-            player = Player(user_name, user_id, chat_id)
-            game = self.games[chat_id]
-            await self.add_player(message_id, player, game)
+            try:
+                game = self.games[chat_id]
+                game.add_player(user_id, user_name)
+                self.player_to_game[user_id] = game
+                self.dealt_cards[user_id] = {}
+                reply = 'You joined the game!'
+            except GameAlreadyStarted:
+                reply = 'Can\'t join middle game. Finish it or /force_end first'
 
-    async def add_player(self, message_id: int, player: Player, game: Game):
-        if player.id in self.players:
-            # this player is already in a game
-            reply = 'You\'re already in a game. Quit or finish it first.'
-            await self.bot.sendMessage(
-                player.group_id,
-                reply,
-                reply_to_message_id=message_id
-            )
-            return False
+        await self.bot.sendMessage(
+            chat_id,
+            reply,
+            reply_to_message_id=message_id
+        )
+
+    async def start(self, message: Dict[str, Any], _):
+        '''
+        Start the game and send cards to players
+
+        Args:
+            message: a dict containing message data
+        '''
+        chat_id = message['chat']['id']
+        message_id = message['message_id']
+
+        keyboard_markup = None
+        try:
+            game = self.games[chat_id]
+            game.start()
+            for user_id in game.players.keys():
+                for _ in range(2):
+                    await self.deal_random_card(user_id)
+
+
+            reply = 'Game started!'
+            keyboard_markup = ReplyKeyboardMarkup(keyboard=[
+                [KeyboardButton(text='Foreign aid'),
+                 KeyboardButton(text='Quit game')]
+            ])
+        except KeyError:
+            reply = 'The game was not created. Create it using /new_game'
+        except GameAlreadyStarted:
+            reply = 'Can\'t join middle game. Finish it or /force_end first'
+
+        await self.bot.sendMessage(
+            chat_id,
+            reply,
+            reply_to_message_id=message_id,
+            reply_markup=keyboard_markup,
+        )
+
+    async def deal_random_card(self, user_id: int):
+        '''
+        Deal a random card to a player
+
+        Args:
+            user_id: Id of the user to deal the card to
+        '''
+        game = self.player_to_game[user_id]
+        card = game.deal_card(user_id)
+        await self.deal_card(user_id, card)
+
+    async def deal_card(self, user_id: int, card: Card):
+        '''
+        Send the card to the player's chat
+
+        Args:
+            user_id: Id to where the card will be sent
+            card: Card that will be sent
+        '''
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text='Hide',
+                callback_data='/hide'
+            ),
+             InlineKeyboardButton(
+                 text='Remove',
+                 callback_data='/delete'
+             )],
+        ])
+        message = await self.bot.sendMessage(
+            user_id,
+            card.name,
+            reply_markup=keyboard
+        )
+        message_id = message['message_id']
+        self.dealt_cards[user_id][message_id] = card
+
+    async def foreign_aid(self, message, _):
+        '''
+        Start a foreign aid action
+
+        Args:
+            message: a dict containing message data
+        '''
+        player_id = message['from']['id']
+        game = self.player_to_game[player_id]
 
         try:
-            private_reply = 'You joined a game.'
-            keyboard_markup = ReplyKeyboardMarkup(keyboard=[
-                    [KeyboardButton(text='Start game'),
-                    KeyboardButton(text='Quit game')]
-            ])
-
+            cards = game.foreign_aid(player_id)
+            for card in cards:
+                await self.deal_card(player_id, card)
+        except ForeignAidNotFinished:
             await self.bot.sendMessage(
-                player.id,
-                private_reply,
-                reply_markup=keyboard_markup
+                player_id,
+                'You need remove cards from previous Foreign Aid first',
             )
-        except:
-            # couldn't send a private message
-            error_message = dedent('''
-                You can't do this. Try sending me a hi in
-                private first :)
-            ''')
-            await self.bot.sendMessage(
-                player.group_id,
-                error_message,
-                reply_to_message_id=message_id
-            )
-            return False
 
-        game.add_player(player)
-        self.players[player.id] = player
-        return True
-
-    async def start_game(self, message, args):
-        player_id = message['from']['id']
-        group_id = self.players[player_id].group_id
-        game = self.games[group_id]
-
-        game.create_deck()
-        await self.distribute_cards(game)
-
-    async def distribute_cards(self, game: Game):
-        for player in game.players:
-            await self.send_actions(player)
-            for i in range(2):
-                await self.send_random_card(player, game)
-
-    async def send_actions(self, player: Player):
+    async def actions(self, message: Dict[str, Any], _):
+        '''
+        Sends a list of the possible actions
+        '''
+        chat_id = message['chat']['id']
         actions = dedent('''\
-            *Influences and it's actions*
+            *Influences and its actions*
             *All* - Get 1 coin. Get 2 coins. Spend 7 coins to give
             a coup d'etat (kill a influence of a player of your choice).
             With 10 or more coins, coup d'etat is mandatory.
@@ -188,270 +219,200 @@ class CoupBot:
             *Duchess* - Blocks assassins.
         ''')
 
-        keyboard_markup = ReplyKeyboardMarkup(keyboard=[
-                [KeyboardButton(text='Foreign aid'),
-                KeyboardButton(text='Quit game')]
-        ])
-
         await self.bot.sendMessage(
-            player.id,
+            chat_id,
             actions,
-            reply_markup=keyboard_markup,
             parse_mode='Markdown'
         )
 
-    async def send_random_card(self, player: Player, game: Game):
-        new_card = game.random_card()
+    async def hide(self, message, _):
+        '''
+        Edit message to hide a card from the player
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text= 'Hide',
-                callback_data='/hide'
-            ),
-            InlineKeyboardButton(
-                text= 'Remove',
-                callback_data='/delete'
-            )],
-        ])
-
-        new_card_message = await self.bot.sendMessage(
-            player.id,
-            new_card.value,
-            reply_markup=keyboard
-        )
-
-        message_id = new_card_message['message_id']
-        player.add_card(new_card, message_id)
-
-    async def hide(self, message, args):
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['message']['chat']['id']
         message_id = message['message']['message_id']
-        card_value = message['message']['text']
-        player = self.players[chat_id]
+
+        if chat_id not in self.player_to_game:
+            return await self.bot.sendMessage(
+                chat_id,
+                'You are not in a game',
+                message_id
+            )
+
+        game = self.player_to_game[chat_id]
+        card = self.dealt_cards[chat_id][message_id]
+        game.hide_card(chat_id, card)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text= 'Show',
+                text='Show',
                 callback_data='/show'
             ),
-            InlineKeyboardButton(
-                text= 'Remove',
-                callback_data='/delete'
+             InlineKeyboardButton(
+                 text='Remove',
+                 callback_data='/delete'
             )],
         ])
 
-        player.hide_card(message_id)
         await self.bot.editMessageText(
             msg_identifier=(chat_id, message_id),
             text='?',
             reply_markup=keyboard
         )
 
-    async def show(self, message, args):
+    async def show(self, message, _):
+        '''
+        Edit message to show a hidden card
+
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['message']['chat']['id']
         message_id = message['message']['message_id']
-        player = self.players[chat_id]
+        if chat_id not in self.player_to_game:
+            return await self.bot.sendMessage(
+                chat_id,
+                'You are not in a game',
+                message_id
+            )
 
+        game = self.player_to_game[chat_id]
+        card = self.dealt_cards[chat_id][message_id]
+        game.show_card(chat_id, card)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text= 'Hide',
+                text='Hide',
                 callback_data='/hide'
             ),
-            InlineKeyboardButton(
-                text= 'Remove',
-                callback_data='/delete'
+             InlineKeyboardButton(
+                 text='Remove',
+                 callback_data='/delete'
             )],
         ])
 
-        player = self.players[chat_id]
-        player.show_card(message_id)
-        card_value = player.card_value(message_id)
         await self.bot.editMessageText(
             msg_identifier=(chat_id, message_id),
-            text = card_value,
+            text=card.name,
             reply_markup=keyboard
         )
 
-    async def delete(self, message, args):
+    async def delete(self, message, _):
+        '''
+        Deletes a card from the player's hand. Remvoes player from game
+        if it has no cards left, and finishes the game if there's only
+        one player left
+
+        Args:
+            message: a dict containing message data
+        '''
         message_id = message['message']['message_id']
         chat_id = message['message']['chat']['id']
-        player = self.players[chat_id]
-        group_id = player.group_id
-        game = self.games[group_id]
+        player_name = message['message']['chat']['first_name']
 
-        card = player.pop_card(message_id)
-        message = 'A card from {} was deleted.'.format(player.name)
-        await self.bot.sendMessage(group_id, message)
+        game = self.player_to_game[chat_id]
+        card = self.dealt_cards[chat_id][message_id]
+        was_hidden = game.is_hidden(chat_id, card)
+        player_removed = game.remove_card(chat_id, card)
+
+        del self.dealt_cards[chat_id][message_id]
         await self.bot.deleteMessage((chat_id, message_id))
+        message = f'A card from {player_name} was deleted.'
+        await self.bot.sendMessage(game.group_id, message)
 
-        if not card.hidden and player.foreign_aid_cards == 0:
-            # if a showing card is delete and the player isn't in a foreign
-            # aid, the player just proved having an influence. Send another
-            await self.send_random_card(player, game)
-            message = '{} bought a new card'.format(player.name)
-            await self.bot.sendMessage(group_id, message)
+        if player_removed:
+            del self.player_to_game[chat_id]
+            del self.dealt_cards[chat_id]
+            if game.ended():
+                await self.end_game(game)
 
-        elif player.foreign_aid_cards != 0:
-            # The player is deciding which of the cards will stay after the aid
-            player.foreign_aid_cards -= 1
-            if player.foreign_aid_cards == 0:
-                message = '{} finished a foreign aid'.format(player.name)
-                await self.bot.sendMessage(group_id, message)
+        elif not was_hidden:
+            await self.deal_random_card(chat_id)
 
-        game.stack_card(card)
-        if len(player.cards) == 0:
-            # player has no more cards
-            await self.remove_player(player, game)
-            endgame = self.is_endgame(game)
-            if endgame:
-                await self.finish_game(game)
+    async def end_game(self, game):
+        '''
+        Finish current game
 
-    def is_endgame(self, game: Game):
-        if len(game.players) <= 1:
-            return True
-        else:
-            return False
+        Args:
+            game: Game to be finished
+        '''
+        group_id = game.group_id
+        reply = 'Game over.'
+        if len(game.players) == 1:
+            winner = next(iter(game.players.values()))
+            reply += f' {winner.name} is the winner!'
 
-    async def finish_game(self, game: Game):
-        player = next(iter(game.players))
-
-        message = 'You won the game'
-        await self.bot.sendMessage(player.id, message)
-        await self.remove_player(player, game)
-
-        group_id = player.group_id
-        message = 'Game over, {} won'.format(player.name)
-        await self.bot.sendMessage(group_id, message)
+        for player in game.players.values():
+            for message_id in self.dealt_cards[player.id].keys():
+                await self.bot.deleteMessage((player.id, message_id))
+            del self.player_to_game[player.id]
+            del self.dealt_cards[player.id]
 
         del self.games[group_id]
 
-    async def foreign_aid(self, message, args):
-        player_id = message['from']['id']
-        player = self.players[player_id]
-        group_id = player.group_id
-
-        if player.foreign_aid_cards == 0:
-            message = '{} used foreign aid.'.format(player.name)
-            await self.bot.sendMessage(group_id, message)
-
-            n_cards = len(player.cards)
-            player.foreign_aid_cards = n_cards
-            for i in range(n_cards):
-                game = self.games[group_id]
-                await self.send_random_card(player, game)
-
-    async def quit_game(self, message, args):
-        player_id = message['from']['id']
-        player = self.players[player_id]
-        group_id = player.group_id
-        game = self.games[group_id]
-
-        await self.remove_player(player, game)
-        endgame = self.is_endgame(game)
-        if endgame:
-            await self.finish_game(game)
-
-    async def remove_player(self, player: Player, game: Game):
-        for message_id in dict(player.cards):
-            card = player.pop_card(message_id)
-            game.stack_card(card)
-            await self.bot.deleteMessage((player.id, message_id))
-        message = 'You quitted the game.'
         await self.bot.sendMessage(
-            player.id,
-            message,
-            reply_markup=ReplyKeyboardRemove()
+            group_id,
+            reply,
         )
 
-        del self.players[player.id]
-        game.remove_player(player)
+    async def force_endgame(self, message, _):
+        '''
+        Force the end of the current game
 
-    async def force_endgame(self, message, args):
-        chat_type = message['chat']['type']
-        message_id = message['message_id']
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['chat']['id']
 
-        if chat_type != 'group' and chat_type != 'supergroup':
-            # tried to end a game outside a group
-            reply = dedent('''\
-                This action can only be done in a group with a started
-                game.
-            ''')
-            await self.bot.sendMessage(
+        if chat_id not in self.games:
+            return await self.bot.sendMessage(
                 chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
-        elif chat_id not in self.games:
-            # no game in this group
-            reply = 'This group haven\'t started a game.'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
-        else:
-            game = self.games[chat_id]
-            for player in set(game.players):
-                await self.remove_player(player, game)
-            del self.games[chat_id]
-
-            reply = 'Game over.'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
+                'Game not started here',
             )
 
-    async def status(self, message, args):
+        game = self.games[chat_id]
+        await self.end_game(game)
+
+    async def status(self, message, _):
+        '''
+        Sends a message with the status of the players' hands
+
+        Args:
+            message: a dict containing message data
+        '''
         player_id = message['from']['id']
         chat_id = message['chat']['id']
         message_id = message['message_id']
 
-        if player_id not in self.players:
-            # tried to get status while not part of a game
+        if player_id not in self.player_to_game:
             reply = 'You\'re not in a game.'
-            await self.bot.sendMessage(
-                chat_id,
-                reply,
-                reply_to_message_id=message_id
-            )
         else:
-            group_id = self.players[player_id].group_id
-            game = self.games[group_id]
+            game = self.player_to_game[player_id]
+            reply = game.status()
 
-            reply = ''
-            for player in game.players:
-                reply += '*{}*: {} card(s).'.format(
-                    player.name, len(player.cards)
-                )
+        await self.bot.sendMessage(
+            chat_id,
+            reply,
+            reply_to_message_id=message_id
+        )
 
-                if player.foreign_aid_cards != 0:
-                    reply += ' {} foreign aid card(s)'.format(
-                        player.foreign_aid_cards
-                    )
+    async def help(self, message, _):
+        '''
+        Send a message with bot's actions
 
-                reply += '\n'
-
-            if game.last_status_sent != 0:
-                await self.bot.deleteMessage((group_id, game.last_status_sent))
-            sent_message = await self.bot.sendMessage(
-                group_id,
-                reply,
-                parse_mode='Markdown'
-            )
-            game.last_status_sent = sent_message['message_id']
-
-    async def help(self, message, args):
+        Args:
+            message: a dict containing message data
+        '''
         chat_id = message['chat']['id']
         message_id = message['message_id']
 
-        # ok. internacionalization is weird and this way was the only one I
-        # could manage to generate a correct template for i18n
         reply = dedent('''\
-            */start* - Start a game in a group.
+            */new_game* - Prepare to start a new game.
             */join* - User joins the game if that match
             hasn't started.
+            */start* - Start a game in a group.
             */force_endgame* - Forces the end of the game in a group.
             */rules* - Send a message with the game's rules.
             */status* - Send to the group the current state of the
@@ -464,8 +425,14 @@ class CoupBot:
             parse_mode='Markdown'
         )
 
-    async def rules(self, message, args):
-        chat_id = message['from']['id']
+    async def rules(self, message, _):
+        '''
+        Send a message with bot's actions
+
+        Args:
+            message: a dict containing message data
+        '''
+        chat_id = message['chat']['id']
         message_id = message['message_id']
 
         reply = dedent('''\
@@ -492,12 +459,25 @@ class CoupBot:
             remaining.
         ''')
 
-        await self.bot.sendMessage(chat_id, reply, reply_to_message_id=message_id)
+        await self.bot.sendMessage(
+            chat_id,
+            reply,
+            reply_to_message_id=message_id
+        )
 
-    def default(self, message, args):
-        pass
+    def default(self, _, __):
+        '''
+        Default action. It gets called when the bot
+        reads an invalid command.
+        '''
 
     def read_command(self, message):
+        '''
+        Read command to see which function to call
+
+        Args:
+            message: a dict containing message data
+        '''
         if 'text' in message:
             message_text = message['text']
         else:
@@ -509,10 +489,14 @@ class CoupBot:
             args = message_text[1:]
 
             return command, (args,)
-        else:
-            if message_text == 'Start game':
-                return 'start_game', ([],)
-            elif message_text == 'Foreign aid':
-                return 'foreign_aid', ([],)
-            elif message_text == 'Quit game':
-                return 'quit_game', ([],)
+
+        if message_text == 'Start game':
+            return 'start_game', ([],)
+
+        if message_text == 'Foreign aid':
+            return 'foreign_aid', ([],)
+
+        if message_text == 'Quit game':
+            return 'quit_game', ([],)
+
+        return 'default', ([],)
