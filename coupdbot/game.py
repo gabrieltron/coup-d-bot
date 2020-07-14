@@ -168,6 +168,20 @@ class Game:
             self.deal_card(player_id, True) for _ in range(player.hand_size())
         ]
 
+    def remove_player(self, player_id: int):
+        '''
+        Removes player from the game
+
+        Args:
+            player_id: Id of the player to be removed
+        '''
+        player = self.players[player_id]
+        for card in player.hand():
+            player.remove_card(card)
+            self.deck.append(card)
+        shuffle(self.deck)
+        del self.players[player_id]
+
     def ended(self):
         '''
         Check if the game is over
@@ -175,7 +189,7 @@ class Game:
         Returns:
             Wheter the game has ended or not
         '''
-        return len(self.players == 1)
+        return len(self.players) <= 1
 
     def create_deck(self):
         '''

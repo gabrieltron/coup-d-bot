@@ -84,6 +84,15 @@ class Player:
         else:
             raise CardNotFound
 
+    def hand(self):
+        '''
+        Returns all cards in hand
+
+        Returns:
+            A list with all cards the player holds
+        '''
+        return self.cards + self.hidden_cards
+
     def is_hidden(self, card: Card):
         '''
         Check if a card is hidden
@@ -102,4 +111,4 @@ class Player:
         Returns:
             How many cards the player has
         '''
-        return len(self.cards) + len(self.hidden_cards)
+        return len(self.hand())

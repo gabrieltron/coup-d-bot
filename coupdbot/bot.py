@@ -51,7 +51,7 @@ class CoupBot:
         if chat_id in self.games:
             reply = dedent('''\
                 There's already a game in this chat, finish it firt.
-                Alternatively, you can /force_game, but it'll interrupt
+                Alternatively, you can /force_endgame, but it'll interrupt
                 the current game!
             ''')
 
@@ -329,13 +329,48 @@ class CoupBot:
         await self.bot.sendMessage(game.group_id, message)
 
         if player_removed:
-            del self.player_to_game[chat_id]
-            del self.dealt_cards[chat_id]
+            await self.remove_player(chat_id)
             if game.ended():
                 await self.end_game(game)
 
         elif not was_hidden:
             await self.deal_random_card(chat_id)
+
+    async def remove_player(self, user_id: int):
+        '''
+        Removes a player from the game
+
+        Args:
+            user_id: Id of the user to be removed
+        '''
+        for message_id in self.dealt_cards[user_id].keys():
+            await self.bot.deleteMessage((user_id, message_id))
+        del self.dealt_cards[user_id]
+
+        game = self.player_to_game[user_id]
+        game.remove_player(user_id)
+        del self.player_to_game[user_id]
+
+    async def quit_game(self, message: Dict[str, Any], _):
+        '''
+        Removes a user from the game
+
+        Args:
+            message: a dict containing message data
+        '''
+        chat_id = message['chat']['id']
+        user_id = message['from']['id']
+
+        if user_id not in self.player_to_game:
+            return await self.bot.sendMessage(
+                chat_id,
+                'You are not in a game'
+            )
+
+        game = self.player_to_game[user_id]
+        await self.remove_player(user_id)
+        if game.ended():
+            await self.end_game(game)
 
     async def end_game(self, game):
         '''
@@ -350,14 +385,10 @@ class CoupBot:
             winner = next(iter(game.players.values()))
             reply += f' {winner.name} is the winner!'
 
-        for player in game.players.values():
-            for message_id in self.dealt_cards[player.id].keys():
-                await self.bot.deleteMessage((player.id, message_id))
-            del self.player_to_game[player.id]
-            del self.dealt_cards[player.id]
+        for player in list(game.players.values()):
+            await self.remove_player(player.id)
 
-        del self.games[group_id]
-
+        del self.games[game.group_id]
         await self.bot.sendMessage(
             group_id,
             reply,
@@ -502,4 +533,3 @@ class CoupBot:
             return 'quit_game', ([],)
 
         return 'default', ([],)
-

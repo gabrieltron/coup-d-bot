@@ -19,7 +19,7 @@ def routes(coup_bot: CoupBot):
         x: getattr(coup_bot, x)
         for x in
         ['new_game', 'join', 'start', 'actions', 'hide', 'show',
-         'delete', 'foreign_aid', 'force_endgame',
+         'delete', 'foreign_aid', 'force_endgame', 'quit_game',
          'help', 'rules', 'status']
     }
     routes[None] = coup_bot.default
