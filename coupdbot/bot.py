@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from textwrap import dedent
 from typing import Any, Dict
@@ -6,9 +7,12 @@ from telepot.aio import Bot
 from telepot.namedtuple import (InlineKeyboardButton, InlineKeyboardMarkup,
                                 KeyboardButton, ReplyKeyboardMarkup)
 
-from .errors import ForeignAidNotFinished, GameAlreadyStarted
 from .cards import Card
+from .errors import ForeignAidNotFinished, GameAlreadyStarted
 from .game import Game
+
+
+COMMAND_RE = re.compile(r'/([^@\s]*)(?:@([^\s]*))?(?:\s+(.*))?', re.S)
 
 
 @dataclass
@@ -21,12 +25,14 @@ class CoupBot:
 
     Attributes:
         bot: Bot handler
+        name: Name of the bot
         games: Map from group id to its Game object.
         player_to_game: Map from user id to its game.
         dealt_cards: Nested map from user_id and message_id to which card
         that message represents.
     '''
     bot: Bot
+    name: str
     games: Dict[int, Game] = field(default_factory=lambda: {})
     player_to_game: Dict[int, Game] = field(default_factory=lambda: {})
     dealt_cards: Dict[int, Dict[int, Card]] = field(default_factory=lambda: {})
@@ -479,24 +485,21 @@ class CoupBot:
             message: a dict containing message data
         '''
         if 'text' in message:
-            message_text = message['text']
+            match = COMMAND_RE.search(message['text'].strip())
         else:
-            message_text = message['data']
+            match = COMMAND_RE.search(message['data'].strip())
 
-        if message_text[0] == '/':
-            message_text = message_text.split()
-            command = message_text[0][1:]
-            args = message_text[1:]
+        if match:
+            command, recipient, args = match.groups()
+            if recipient is not None and recipient != self.name:
+                return None
 
             return command, (args,)
 
-        if message_text == 'Start game':
-            return 'start_game', ([],)
-
-        if message_text == 'Foreign aid':
+        if message['text'] == 'Foreign aid':
             return 'foreign_aid', ([],)
-
-        if message_text == 'Quit game':
+        if message['text'] == 'Quit game':
             return 'quit_game', ([],)
 
         return 'default', ([],)
+

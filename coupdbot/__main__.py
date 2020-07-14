@@ -39,7 +39,8 @@ async def main(token):
     Args:
         token: token of the bot created with BotFather
     '''
-    coup_bot = CoupBot(Bot(token))
+    bot = Bot(token)
+    coup_bot = CoupBot(bot, (await bot.getMe())['username'])
     loop = asyncio.get_event_loop()
     loop.create_task(
         MessageLoop(
